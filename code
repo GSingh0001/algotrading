@@ -1,0 +1,417 @@
+import pandas as pd
+import bt
+import numpy as np
+import seaborn as sb
+import matplotlib.pyplot as plt
+
+tickers = ['CB', 'TRU', 'ZW=F', 'ZC=F', 'ZS=F', 'WMT', 'BAYRY', 'MATX']
+
+sd_train = '2015-1-1'
+ed_train = '2020-01-01'
+
+sd_test = '2022-01-01'
+ed_test = '2024-05-01'
+
+data_Train = bt.get(tickers, start=sd_train, end=ed_train)
+data_Test = bt.get(tickers, start=sd_test, end=ed_test)
+
+#Benchmark equial weights
+# Benchmark = bt.Strategy('Benchmark', 
+#                         [bt.algos.RunMonthly(),
+#                             bt.algos.SelectAll(),
+#                             bt.algos.WeighEqually(),
+#                             bt.algos.Rebalance()])
+
+Benchmark = bt.Strategy('Benchmark',  
+                        [bt.algos.RunOnce(),
+                              bt.algos.SelectAll(),
+                              bt.algos.WeighEqually(),
+                              bt.algos.Rebalance()])
+
+test_bench = bt.Backtest(Benchmark, data_Train)
+res_bench = bt.run(test_bench)
+res_bench.plot()
+res_bench.plot_security_weights()
+res_bench.display()
+
+
+#Estrategia para SMA
+#65-145
+ma_short_train = data_Train.rolling(65).mean()
+ma_long_train = data_Train.rolling(145).mean()
+target_weights = ma_short_train.copy()
+magnitude = 1/len(tickers)
+target_weights[ma_short_train>ma_long_train] = magnitude
+target_weights[ma_short_train<=ma_long_train] = -magnitude
+target_weights[ma_long_train.isnull()] = 0.0 
+ma_cross_strat_train = bt.Strategy('SMA Train',[bt.algos.WeighTarget(target_weights),
+                                    bt.algos.Rebalance()])
+test_MA_train = bt.Backtest(ma_cross_strat_train, data_Train)
+res_MA_train = bt.run(test_MA_train)
+res_MA_train.plot()
+res_MA_train.plot_security_weights()
+res_MA_train.display()
+
+
+ma_short_test = data_Test.rolling(65).mean()
+ma_long_test = data_Test.rolling(145).mean()
+target_weights = ma_short_test.copy()
+magnitude = 1/len(tickers)
+target_weights[ma_short_test>ma_long_test] = magnitude
+target_weights[ma_short_test<=ma_long_test] = -magnitude
+target_weights[ma_long_test.isnull()] = 0.0 
+ma_cross_strat_test = bt.Strategy('SMA Test',[bt.algos.WeighTarget(target_weights),
+                                    bt.algos.Rebalance()])
+test_MA_test = bt.Backtest(ma_cross_strat_test, data_Test)
+res_MA_test = bt.run(test_MA_test)
+res_MA_test.plot()
+res_MA_test.plot_security_weights()
+res_MA_test.display()
+
+#Estrategia para EMA
+ema_short_train = data_Train.rolling(60).mean()
+ema_long_train = data_Train.rolling(135).mean()
+target_weights = ema_short_train.copy()
+magnitude = 1/len(tickers)
+target_weights[ema_short_train>ema_long_train] = magnitude
+target_weights[ema_short_train<=ema_long_train] = -magnitude
+target_weights[ema_long_train.isnull()] = 0.0 
+ema_cross_strat_train = bt.Strategy('EMA Train',[bt.algos.WeighTarget(target_weights),
+                                    bt.algos.Rebalance()])
+test_eMA_train = bt.Backtest(ema_cross_strat_train, data_Train)
+res_eMA_train = bt.run(test_eMA_train)
+res_eMA_train.plot()
+res_eMA_train.plot_security_weights()
+res_eMA_train.display()
+
+ema_short_test = data_Test.rolling(60).mean()
+ema_long_test = data_Test.rolling(135).mean()
+target_weights = ema_short_test.copy()
+magnitude = 1/len(tickers)
+target_weights[ema_short_test>ema_long_test] = magnitude
+target_weights[ema_short_test<=ema_long_test] = -magnitude
+target_weights[ema_long_test.isnull()] = 0.0 
+ema_cross_strat_test = bt.Strategy('EMA Test',[bt.algos.WeighTarget(target_weights),
+                                    bt.algos.Rebalance()])
+test_eMA_test = bt.Backtest(ema_cross_strat_test, data_Test)
+res_eMA_test = bt.run(test_eMA_test)
+res_eMA_test.plot()
+res_eMA_test.plot_security_weights()
+res_eMA_test.display()
+
+#Estrategia para Markowitz
+lower_bound = 10 / 100
+upper_bound = 75 / 100
+s_mark = bt.Strategy('Markowitz', 
+                    [bt.algos.RunEveryNPeriods(15, offset=30),
+                    bt.algos.SelectAll(),
+                    bt.algos.WeighMeanVar(lookback=pd.DateOffset(months=3),bounds=(lower_bound,upper_bound)),
+                    bt.algos.Rebalance()])
+test_Mark_train = bt.Backtest(s_mark, data_Train)
+res_Mark_train = bt.run(test_Mark_train)
+res_Mark_train.plot()
+res_Mark_train.plot_security_weights()
+res_Mark_train.display()
+
+test_Mark_test = bt.Backtest(s_mark, data_Test)
+res_Mark_test = bt.run(test_Mark_test)
+res_Mark_test.plot()
+res_Mark_test.plot_security_weights()
+res_Mark_test.display()
+
+#Estrategy Momentum and Low Volatility
+# Calculate the returns and handle any NaN values
+returns = data_Train.pct_change().dropna(how='all')
+returns = returns.ffill().bfill()  # Ensure no NaN values in returns
+# Calculate the volatility (standard deviation of returns) for each asset
+volatility = returns.rolling(window=21).std().dropna(how='all')
+volatility = volatility.ffill().bfill()  # Ensure no NaN values in volatility
+# Define a custom algorithm to select based on volatility
+class SelectLowVolatility(bt.Algo):
+    def _init_(self, n):
+        self.n = n
+    def _call_(self, target):
+        # Get the current date
+        date = target.now
+        # Ensure we have enough data to calculate volatility
+        if date not in volatility.index or len(volatility.loc[:date].dropna()) < 21:
+            return False
+        # Get the volatility data up to the current date
+        if len(volatility.loc[:date]) < 21:
+            return False
+        vol_data = volatility.loc[:date].iloc[-1].dropna()
+        # Ensure there are enough assets to select
+        if len(vol_data) < self.n:
+            return False
+        # Select the N assets with the lowest volatility
+        selected = vol_data.nsmallest(self.n).index
+        # Update the target with the selected assets
+        target.temp['selected'] = selected
+        return True
+
+# Define the momentum strategy
+mom_s = bt.Strategy('Momentum',
+                    [bt.algos.RunMonthly(),
+                     bt.algos.SelectAll(),
+                     bt.algos.SelectMomentum(n=7, lookback=pd.DateOffset(months=17)),  # Selecting top 3 based on 6 months momentum
+                     bt.algos.WeighEqually(),
+                     bt.algos.Rebalance()])
+# Define the low volatility strategy
+vol_s = bt.Strategy('Low Volatility',
+                    [bt.algos.RunMonthly(),
+                     bt.algos.SelectAll(),
+                     SelectLowVolatility(n=3),
+                     bt.algos.WeighEqually(),
+                     bt.algos.Rebalance()])
+# Master strategy combining momentum and low volatility strategies
+master = bt.Strategy('Master',
+                     [bt.algos.RunMonthly(),
+                      bt.algos.SelectAll(),
+                      bt.algos.WeighEqually(),
+                      bt.algos.Rebalance()],
+                     [mom_s, vol_s, 'spy'])
+# Create and run the backtest
+test_Mom_train = bt.Backtest(master, data_Train)
+res_Mom_train = bt.run(test_Mom_train)
+res_Mom_train.plot()
+res_Mom_train.plot_security_weights()
+res_Mom_train.display()
+
+returns = data_Test.pct_change().dropna(how='all')
+returns = returns.ffill().bfill()  # Ensure no NaN values in returns
+# Calculate the volatility (standard deviation of returns) for each asset
+volatility = returns.rolling(window=21).std().dropna(how='all')
+volatility = volatility.ffill().bfill()  # Ensure no NaN values in volatility
+# Define a custom algorithm to select based on volatility
+class SelectLowVolatility(bt.Algo):
+    def _init_(self, n):
+        self.n = n
+    def _call_(self, target):
+        # Get the current date
+        date = target.now
+        # Ensure we have enough data to calculate volatility
+        if date not in volatility.index or len(volatility.loc[:date].dropna()) < 21:
+            return False
+        # Get the volatility data up to the current date
+        if len(volatility.loc[:date]) < 21:
+            return False
+        vol_data = volatility.loc[:date].iloc[-1].dropna()
+        # Ensure there are enough assets to select
+        if len(vol_data) < self.n:
+            return False
+        # Select the N assets with the lowest volatility
+        selected = vol_data.nsmallest(self.n).index
+        # Update the target with the selected assets
+        target.temp['selected'] = selected
+        return True
+
+# Define the momentum strategy
+mom_s = bt.Strategy('Momentum',
+                    [bt.algos.RunMonthly(),
+                     bt.algos.SelectAll(),
+                     bt.algos.SelectMomentum(n=7, lookback=pd.DateOffset(months=17)),  # Selecting top 3 based on 6 months momentum
+                     bt.algos.WeighEqually(),
+                     bt.algos.Rebalance()])
+# Define the low volatility strategy
+vol_s = bt.Strategy('Low Volatility',
+                    [bt.algos.RunMonthly(),
+                     bt.algos.SelectAll(),
+                     SelectLowVolatility(n=3),
+                     bt.algos.WeighEqually(),
+                     bt.algos.Rebalance()])
+# Master strategy combining momentum and low volatility strategies
+master = bt.Strategy('Mom & Vol',
+                     [bt.algos.RunMonthly(),
+                      bt.algos.SelectAll(),
+                      bt.algos.WeighEqually(),
+                      bt.algos.Rebalance()],
+                     [mom_s, vol_s, 'spy'])
+# Create and run the backtest
+test_Mom_test = bt.Backtest(master, data_Test)
+res_Mom_test = bt.run(test_Mom_test)
+res_Mom_test.plot()
+res_Mom_test.plot_security_weights()
+res_Mom_test.display()
+
+
+#Estrategy RSI
+# Function to calculate RSI
+data = data_Train
+def calculate_rsi(data, window=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# Calculate the RSI for each asset
+rsi = data.apply(calculate_rsi)
+
+# Define a custom algorithm to select based on RSI
+class SelectRSI(bt.Algo):
+    def _init_(self, lower=41, upper=59):
+        self.lower = lower
+        self.upper = upper
+
+    def _call_(self, target):
+        date = target.now
+        if date not in rsi.index:
+            return False
+        
+        rsi_data = rsi.loc[date].dropna()
+        # Select assets with RSI below the lower threshold (buy signals)
+        selected = rsi_data[rsi_data < self.lower].index.tolist()
+        # If no assets are oversold, use the overbought threshold (sell signals)
+        if not selected:
+            selected = rsi_data[rsi_data > self.upper].index.tolist()
+        # If no assets are overbought or oversold, do not select any assets
+        if not selected:
+            return False
+        
+        target.temp['selected'] = selected
+        return True
+
+# Define the RSI strategy
+rsi_strategy = bt.Strategy('RSI Strategy',
+                           [bt.algos.RunMonthly(),
+                            bt.algos.SelectAll(),
+                            SelectRSI(lower=41, upper=59),
+                            bt.algos.WeighEqually(),
+                            bt.algos.Rebalance()])
+
+test_RSI_train = bt.Backtest(rsi_strategy, data_Train)
+res_RSI_train = bt.run(test_RSI_train)
+res_RSI_train.plot()
+res_RSI_train.plot_security_weights()
+res_RSI_train.display()
+
+
+data = data_Test
+def calculate_rsi(data, window=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# Calculate the RSI for each asset
+rsi = data.apply(calculate_rsi)
+
+# Define a custom algorithm to select based on RSI
+class SelectRSI(bt.Algo):
+    def _init_(self, lower=41, upper=59):
+        self.lower = lower
+        self.upper = upper
+
+    def _call_(self, target):
+        date = target.now
+        if date not in rsi.index:
+            return False
+        
+        rsi_data = rsi.loc[date].dropna()
+        # Select assets with RSI below the lower threshold (buy signals)
+        selected = rsi_data[rsi_data < self.lower].index.tolist()
+        # If no assets are oversold, use the overbought threshold (sell signals)
+        if not selected:
+            selected = rsi_data[rsi_data > self.upper].index.tolist()
+        # If no assets are overbought or oversold, do not select any assets
+        if not selected:
+            return False
+        
+        target.temp['selected'] = selected
+        return True
+
+# Define the RSI strategy
+rsi_strategy = bt.Strategy('RSI Strategy',
+                           [bt.algos.RunMonthly(),
+                            bt.algos.SelectAll(),
+                            SelectRSI(lower=41, upper=59),
+                            bt.algos.WeighEqually(),
+                            bt.algos.Rebalance()])
+
+test_RSI_test = bt.Backtest(rsi_strategy, data_Test)
+res_RSI_test = bt.run(test_RSI_test)
+res_RSI_test.plot()
+res_RSI_test.plot_security_weights()
+res_RSI_test.display()
+
+
+
+
+# Get the stats for each strategy
+stats_bench = res_bench.stats
+stats_tr_MA = res_MA_train.stats
+stats_te_MA = res_MA_test.stats
+stats_tr_eMA = res_eMA_train.stats
+stats_te_eMA = res_eMA_test.stats
+stats_tr_Mark = res_Mark_train.stats
+stats_te_Mark = res_Mark_test.stats
+stats_tr_Mom = res_Mom_train.stats
+stats_te_Mom = res_Mom_test.stats
+stats_tr_RSI = res_RSI_train.stats
+stats_te_RSI = res_RSI_test.stats
+
+
+# Select the statistics you are interested in
+s_bench = stats_bench.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_tr_MA = stats_tr_MA.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_te_MA = stats_te_MA.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_tr_eMA = stats_tr_eMA.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_te_eMA = stats_te_eMA.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_tr_Mark = stats_tr_Mark.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_te_Mark = stats_te_Mark.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_tr_Mom = stats_tr_Mom.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_te_Mom = stats_te_Mom.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_tr_RSI = stats_tr_RSI.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+s_stats_te_RSI = stats_te_RSI.loc[['cagr', 'daily_sharpe', 'daily_sortino']]
+
+# Concatenate the statistics into one DataFrame
+combined_stats = pd.concat([s_bench,
+                            s_stats_tr_MA, s_stats_te_MA,
+                            s_stats_tr_eMA, s_stats_te_eMA,
+                            s_stats_tr_Mark, s_stats_te_Mark,
+                            s_stats_tr_Mom, s_stats_te_Mom,
+                            s_stats_tr_RSI, s_stats_te_RSI], axis=1)
+# Rename the columns for clarity
+combined_stats.columns = ['Benchmark','SMA Train', 'SMA Test','EMA Train','EMA Test','Mark Train','Mark Test','Mom Train','Mom Test','RSI Train','RSI Test']
+print(combined_stats)
+combined_stats.to_csv('combined_stats.csv')
+
+
+# All Stats
+Combine_all = pd.concat([stats_bench,
+                            stats_tr_MA, stats_te_MA,
+                            stats_tr_eMA, stats_te_eMA,
+                            stats_tr_Mark, stats_te_Mark,
+                            stats_tr_Mom, stats_te_Mom,
+                            stats_tr_RSI, stats_te_RSI], axis=1)
+Combine_all.columns = ['Benchmark','SMA Train', 'SMA Test','EMA Train','EMA Test','Mark Train','Mark Test','Mom Train','Mom Test','RSI Train','RSI Trest']
+print(Combine_all)
+Combine_all.to_csv('Combine_all.csv')
+
+#
+results_train = bt.run(test_MA_train, test_eMA_train, test_Mark_train, test_Mom_train, test_RSI_train, test_bench)
+results_train.plot()
+results_train.display()
+
+results_both = bt.run(test_MA_test, test_eMA_test, test_Mark_test, test_Mom_test, test_RSI_test)
+results_both.plot()
+results_both.display()
+
+#r_tr_ma = bt.run(test_bench, test_MA_train, test_eMA_train, test_Mark_train, test_Mom_train, test_RSI_train, )
+r_tr_ma = bt.run(test_bench, test_MA_train)
+r_tr_ma.plot()
+
+r_tr_ema = bt.run(test_bench, test_eMA_train)
+r_tr_ema.plot()
+
+r_tr_mark = bt.run(test_bench, test_Mark_train)
+r_tr_mark.plot()
+
+r_tr_mom = bt.run(test_bench, test_Mom_train)
+r_tr_mom.plot()
+
+r_tr_rsi = bt.run(test_bench, test_RSI_train)
+r_tr_rsi.plot()
